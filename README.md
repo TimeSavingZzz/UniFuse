@@ -1,204 +1,230 @@
-# Understanding Feature Fusion Strategies in Transformer-based Image Restoration
+# UniFuse
 
 [![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 
-Official code for the paper **"Understanding Feature Fusion Strategies in Transformer-based Image Restoration: Evidence from Document Shadow Removal"** (under review, *Applied Intelligence*).
+Code for the paper **"UniFuse: A Controlled Testbed and Practical Guidelines for
+Feature Fusion in Image Restoration"** (under review, *Applied Intelligence*).
 
-**TL;DR**: We systematically characterize five representative fusion strategies (Concatenation, Cross-Attention, FiLM, Gated, Capacity Scaling) under a controlled Restormer framework across synthetic and real-world document shadow removal datasets. Our key finding: **Transformer self-attention on skip connections already provides implicit cross-modal alignment, making simple concatenation sufficient for real-world data, while complex modulation (FiLM) excels on synthetic data but carries a mechanism-level instability risk on real data.**
-
----
-
-## Four Key Findings
-
-| Finding | Core Insight |
-|---------|-------------|
-| **F1: Domain Flipping** | Optimal fusion reverses across domains: FiLM wins on synthetic (24.77 dB), Concat wins on real (37.20 dB). No single best strategy exists. |
-| **F2: Dual Constraint Law** | Data domain determines strategy *ranking*; data volume determines gap *magnitude*. FiLM outperforms Concat at all data sizes on synthetic data (no crossover). |
-| **F3: Self-Attention as Built-in Fusion** | Decoder self-attention on skip connections already focuses on shadow regions *without* any fusion module. Attention visualization provides direct evidence. |
-| **F4: Robustness Hierarchy** | Concat generalizes best (zero-shot SD7K→RDD: 18.59 dB). FiLM collapses to NaN on real data (tanh saturation) — a previously unreported risk. |
+UniFuse holds the backbone, auxiliary encoder, loss, optimizer, schedule and data
+pipeline fixed, and varies only the module that injects auxiliary features into the
+decoder. The repository contains the training, evaluation and analysis code behind
+the tables and figures in the paper: two backbones, four datasets, five fusion
+mechanisms, one capacity control and a no-fusion baseline, about 80 training runs.
 
 ---
 
-## Five Fusion Strategies
+## Configurations
 
-| Strategy | Type | Params | Mechanism |
-|----------|------|--------|-----------|
-| **Concat** | Concatenation | +0.30M | Conv([decoder_feat; projected_encoder_feat]) |
-| **Cross-Attn** | Attention | +0.44M | Multi-head cross-attention: Q=decoder, KV=shadow |
-| **FiLM** | Modulation | +0.34M | Channel-wise F⊙(1+tanh(γ)) + β |
-| **Gated** | Gating | +0.29M | Sigmoid-gated convex combination F⊙g + S⊙(1-g) |
-| **Large** | Capacity | +20.58M | Concat with backbone dim expanded 48→64 |
+| Configuration | Role | Operation |
+|---|---|---|
+| Concat | fusion mechanism | channel concatenation followed by a 1x1 convolution |
+| CrossAttn | fusion mechanism | multi-head cross-attention; queries from the decoder, keys and values from the auxiliary encoder |
+| FiLM | fusion mechanism | channel-wise scale and shift predicted from auxiliary features |
+| Gated | fusion mechanism | sigmoid gate between decoder and auxiliary features |
+| ASF | fusion mechanism | channel-wise mixture of a FiLM branch and a gated branch, with a learned mixing weight |
+| Large | capacity control | Concat with the backbone widened (Restormer dim 48 -> 64, NAFNet width 16 -> 32) |
+| No fusion | baseline | auxiliary branch removed |
 
-All strategies share the same Restormer U-Net backbone, training protocol, and loss function, enabling controlled comparison.
-
----
-
-## Main Results
-
-### SD7K (Synthetic, 200 training pairs)
-
-| Model | PSNR↑ | SSIM↑ | TextPSNR↑ | LPIPS↓ | Params | Time |
-|-------|-------|-------|-----------|--------|--------|------|
-| Restormer (no fusion) | 23.43 | 0.9174 | 26.62 | 0.0554 | 26.13M | 181.6ms |
-| Concat | 23.74 | 0.9218 | 27.24 | **0.0461** | 26.43M | 181.9ms |
-| Cross-Attn | 23.76 | 0.9164 | 26.46 | 0.0480 | 26.57M | 135.0ms |
-| **FiLM** | **24.77** | **0.9308** | 27.47 | 0.0557 | 26.47M | 182.5ms |
-| Gated | 24.31 | 0.9243 | **27.75** | 0.0496 | 26.42M | 182.6ms |
-| Large (dim=64) | 24.51 | 0.9282 | 27.61 | 0.0496 | 46.71M | 346.0ms |
-
-### RDD (Real-world, 1080 training pairs)
-
-| Model | PSNR↑ | SSIM↑ | TextPSNR↑ | LPIPS↓ | Params | Time |
-|-------|-------|-------|-----------|--------|--------|------|
-| Restormer (no fusion) | 35.72 | 0.9753 | 33.18 | — | 26.13M | 181.6ms |
-| **Concat** | **37.20** | **0.9803** | 34.52 | — | 26.43M | 181.9ms |
-| Cross-Attn† | 36.99 | 0.9701 | 32.92 | — | 26.57M | 135.0ms |
-| FiLM* | 37.01 | 0.9797 | 34.29 | — | 26.47M | 182.5ms |
-| Gated | 35.53 | 0.9747 | 33.18 | — | 26.42M | 182.6ms |
-| Large (dim=64) | 37.05 | 0.9749 | 33.49 | — | 46.71M | 346.0ms |
-
-† 192×192 due to OOM. \* FiLM v2 with gradient clipping; v1 diverged to NaN at E125/E130.
-
-### Scaling Curve (SD7K subsets, 100 epochs)
-
-| Data Pairs | Concat | FiLM | Gated | FiLM–Concat Gap |
-|-----------|--------|------|-------|-----------------|
-| 30 | 22.98 | 23.35 | 23.31 | +0.37 |
-| 60 | 23.47 | 23.77 | 23.78 | +0.30 |
-| 100 | 23.56 | 23.93 | 23.31 | +0.37 |
-| 150 | 23.89 | 24.09 | 23.81 | +0.20 |
-| 200* | 23.74 | 24.77 | 24.31 | +1.03 |
-
-\*200 pairs at 200 epochs.
+The auxiliary encoder is a shared degradation encoder (SDE): it takes a grayscale
+copy of the degraded input, produces features at three scales, and shares weights
+across tasks. Features from the second and third scales are injected at decoder
+levels D2 and D3; the first scale is not used.
 
 ---
 
-## Project Structure
+## Datasets
+
+| Dataset | Task | Data used | Source |
+|---|---|---|---|
+| SD7K | document shadow removal | 200-pair training subset, 190-pair test subset (256x256) | https://github.com/CXH-Research/DocShadow-SD7K |
+| RDD | document shadow removal | 4,371 train / 545 test pairs, 256x256 crops | https://github.com/leiyingtie/DocDeshadower |
+| LOL-v1 | low-light enhancement | 485 train / 15 test pairs | https://github.com/weichen582/RetinexNet |
+| Rain100H | deraining | 1,800 train / 100 test pairs | https://github.com/nnUyi/DerainZoo |
+
+Expected directory layout:
 
 ```
-├── models/
-│   ├── comparison_models.py    # 6 model variants (Restormer baseline + 5 fusion)
-│   ├── model.py                # Original ShaDocFormer (IJCNN 2024)
-│   ├── mask.py                 # Shadow-attentive threshold detector
-│   ├── refine.py               # Cascaded fusion refiner
-│   └── text_aware_model.py     # Text-aware variant
-├── data/
-│   ├── data_RGB.py             # Data loader
-│   ├── dataset_RGB.py          # RDD dataset
-│   └── synthetic_dataset.py    # SD7K synthetic dataset
-├── config/
-│   └── config.py               # Configuration management
-├── utils/
-│   └── utils.py                # PSNR, SSIM, visualization utilities
-├── paper/
-│   └── experiment_results.json # Complete numerical results
-├── train_compare_models.py     # Main training script (supports 6 models × 2 datasets)
-├── train.py                    # Original ShaDocFormer training script
-├── test.py                     # Original ShaDocFormer test script
-├── run_scaling_curve.py        # Data scaling curve experiment
-├── run_scaling_chain.py        # Sequential scaling job launcher (GPU 1)
-├── visualize_attention.py      # Decoder self-attention visualization
-├── eval_cross_dataset.py       # Cross-domain generalization evaluation
-├── eval_ocr.py                 # OCR accuracy evaluation
-├── eval_efficiency.py          # Model efficiency evaluation
-├── evaluate_checkpoint.py      # Single checkpoint evaluation
-├── eval_all_checkpoints.py     # Batch checkpoint evaluation
-├── cross_dataset_eval.py       # Cross-dataset result aggregation
-├── plot_training_curves.py     # Training curve plotting
-├── plot_progress.py            # Experiment progress visualization
-├── config.yml                  # Training parameter configuration
-├── environment.yml             # Conda environment
-└── requirements.txt            # Python dependencies
+dataset/
+├── SD7K/{train,test}/{input,target}/
+├── RDD/{train,test}/                # img/, gt/, back_gt/ as released
+├── LOL-v1/{train,test}/{input,target}/
+└── Rain100H/{train,test}/{input,target}/
+```
+
+The input and target subdirectory of each dataset are defined in `DATASET_CONFIGS`
+in `train_compare_models.py`, so a different RDD target layout can be selected there.
+
+---
+
+## Repository layout
+
+```
+models/
+├── comparison_models.py     # Restormer, NAFNet and the ShadowGuided* fusion variants
+├── fusion_models.py         # NAFNet fusion variants and the ASF module
+├── model.py                 # original ShaDocFormer backbone (shared component)
+├── text_aware_model.py      # text-aware variant (shared component)
+├── mask.py, refine.py, cnn_backbone.py
+data/
+├── dataset_RGB.py           # SD7K / RDD loader (grayscale auxiliary input)
+├── dataset_lol.py           # LOL-v1 loader
+├── dataset_rain100h.py      # Rain100H loader
+├── data_RGB.py, synthetic_dataset.py
+config/config.py             # training configuration
+train_compare_models.py      # main training entry point, all configurations
+train.py, test.py            # original ShaDocFormer training/eval scripts
+evaluate_checkpoint.py       # evaluate one checkpoint
+eval_all_checkpoints.py      # evaluate a directory of checkpoints
+eval_efficiency.py           # parameters, FLOPs, inference time, memory
+eval_lpips.py                # LPIPS
+eval_ocr.py                  # OCR-based text preservation
+eval_cross_dataset.py        # zero-shot cross-dataset transfer
+cross_dataset_eval.py        # cross-dataset result aggregation
+run_scaling_curve.py         # data-volume scaling experiment
+run_scaling_chain.py         # sequential launcher for the scaling runs
+gen_scaling_fig.py           # scaling-curve figure
+cka_analysis.py              # CKA between encoder and decoder features
+alpha_histogram.py           # ASF mixing-weight histogram
+visualize_attention.py       # decoder self-attention maps
+run_attn_viz.py              # batch attention visualization
+plot_training_curves.py      # training curves from logs
+environment.yml, requirements.txt
 ```
 
 ---
 
-## Quick Start
-
-### Environment
+## Installation
 
 ```bash
-git clone https://github.com/TimeSavingZzz/ShaDocFormer.git
-cd ShaDocFormer
 conda env create -f environment.yml
 conda activate shadocformer
 ```
 
-### Training
+The environment uses PyTorch 2.0.1 with CUDA 11.8 and was tested on 4x RTX 3090
+(24 GB).
+
+---
+
+## Training
+
+All runs use AdamW (beta1=0.9, beta2=0.999, weight decay 1e-4), initial learning
+rate 2e-4 with cosine annealing, and 200 epochs. Document shadow removal uses
+L1 + SSIM + FFT loss; low-light enhancement and deraining use L1.
+
+| Configuration | Restormer `--model` | NAFNet `--model` |
+|---|---|---|
+| No fusion | `restormer` | `nafnet` |
+| Concat | `shadow_guided_restormer_concat` | `shadow_guided_nafnet_concat` |
+| CrossAttn | `shadow_guided_restormer_crossattn` | `shadow_guided_nafnet_crossattn` |
+| FiLM | `shadow_guided_restormer_film` | `shadow_guided_nafnet_film` |
+| Gated | `shadow_guided_restormer_gated` | `shadow_guided_nafnet_gated` |
+| ASF | `shadow_guided_restormer_asf` | `shadow_guided_nafnet_asf` |
+| Large | `shadow_guided_restormer_large` | `shadow_guided_nafnet_large` |
 
 ```bash
-# Train Concat model on RDD (real documents)
-python train_compare_models.py \
-    --model shadow_guided_restormer_no_sgca \
-    --dataset rdd --epochs 200 --lr 2e-4 --res 320
+# Restormer, Concat, SD7K
+python train_compare_models.py --model shadow_guided_restormer_concat \
+    --dataset sd7k --epochs 200 --res 256 --output ./experiment_results/restormer_concat_sd7k/
 
-# Train FiLM model on SD7K (synthetic documents)
-python train_compare_models.py \
-    --model shadow_guided_restormer_film \
-    --dataset sd7k --epochs 200 --lr 2e-4 --res 320
+# NAFNet, Gated, LOL-v1
+python train_compare_models.py --model shadow_guided_nafnet_gated \
+    --dataset lol --epochs 200 --res 256 --output ./experiment_results/nafnet_gated_lol/
 
-# Available models: restormer, shadow_guided_restormer_no_sgca,
-#   shadow_guided_restormer_crossattn, shadow_guided_restormer_film,
-#   shadow_guided_restormer_gated, shadow_guided_restormer_large
+# FiLM on RDD uses gradient clipping (v1 diverged to NaN at epochs 125 and 130)
+python train_compare_models.py --model shadow_guided_restormer_film \
+    --dataset rdd --epochs 200 --res 256 --model_variant v2 \
+    --output ./experiment_results/restormer_film_rdd/
 ```
 
-### Evaluation
+CrossAttn is trained at 192x192 (`--res 192`) because its key/value projections do
+not fit in 24 GB at 256x256. All other runs use 256x256.
+
+---
+
+## Evaluation
 
 ```bash
-# Single checkpoint evaluation
-python evaluate_checkpoint.py --model shadow_guided_restormer_no_sgca \
-    --ckpt <path>.pth --dataset rdd
+python evaluate_checkpoint.py --model shadow_guided_restormer_concat \
+    --ckpt experiment_results/restormer_concat_sd7k/shadow_guided_restormer_concat_best.pth \
+    --dataset sd7k
 
-# Cross-domain generalization
-python eval_cross_dataset.py --model shadow_guided_restormer_no_sgca \
-    --ckpt <path>.pth
-
-# OCR performance
-python eval_ocr.py --ckpt <path>.pth --dataset rdd
-```
-
-### Analysis Scripts
-
-```bash
-# Data scaling curve — train on SD7K subsets (30/60/100/150 pairs)
-python run_scaling_curve.py --model concat --size 30 --gpu 0
-
-# Attention visualization — extract and compare decoder self-attention maps
-python visualize_attention.py --data_dir ./dataset/RDD/test/ --num_samples 5
+python eval_efficiency.py     # params, FLOPs, time, memory
+python eval_lpips.py          # perceptual metric
+python eval_ocr.py            # text-region preservation
+python eval_cross_dataset.py  # zero-shot transfer between SD7K and RDD
 ```
 
 ---
 
-## Reproducibility
+## Results
 
-All experiments were conducted on 4× NVIDIA RTX 3090 (24GB) with the following unified protocol:
-- **Optimizer**: AdamW (β₁=0.9, β₂=0.999), weight decay 10⁻⁴
-- **Learning rate**: 2×10⁻⁴, halved at epochs 100 and 150
-- **Batch size**: 1 per GPU (gradient accumulation ×2)
-- **Epochs**: 200 (100 for scaling curve subsets)
-- **Loss**: L₁ + SSIM + FFT frequency-domain loss
+PSNR (dB) and SSIM from the paper. Bold marks the best value in each column.
 
-Complete numerical results and training logs are available in `paper/experiment_results.json`.
+### Document shadow removal
+
+| Strategy | SD7K (Restormer) | RDD (Restormer) | SD7K (NAFNet) | RDD (NAFNet) |
+|---|---|---|---|---|
+| No fusion | 23.43 / 0.9174 | 35.96 / 0.9753 | 21.94 / - | 33.52 / - |
+| Concat | 24.40 / 0.9274 | **37.30** / 0.9738 | 22.33 / - | 34.27 / - |
+| CrossAttn | 23.76 / 0.9164 | 36.99 / 0.9701 | **22.96** / - | 34.93 / - |
+| FiLM | **24.77** / **0.9308** | 37.01 / 0.9797 | 22.74 / - | 34.91 / - |
+| Gated | 24.31 / 0.9243 | 36.97 / 0.9677 | 22.37 / - | 34.79 / - |
+| ASF | 24.08 / 0.9295 | 34.66 / 0.9668 | 22.55 / - | 34.87 / - |
+| Large | 24.51 / 0.9282 | 37.31 / 0.9749 | 22.85 / - | **35.38** / - |
+
+### Low-light enhancement and deraining
+
+| Strategy | LOL (Restormer) | Rain100H (Restormer) | LOL (NAFNet) | Rain100H (NAFNet) |
+|---|---|---|---|---|
+| No fusion | 21.47 / 0.8458 | 35.18 / 0.9433 | 20.36 / 0.7828 | 27.42 / 0.8240 |
+| Concat | **23.45** / 0.8586 | 35.98 / 0.9504 | 20.90 / 0.7966 | 28.00 / 0.8476 |
+| CrossAttn | 23.15 / 0.8562 | 35.83 / 0.9530 | **22.05** / 0.8144 | 27.50 / 0.8390 |
+| FiLM | 22.77 / 0.8588 | 36.84 / 0.9540 | 20.79 / 0.7980 | 28.04 / 0.8484 |
+| Gated | 22.60 / 0.8489 | 35.73 / 0.9484 | 21.33 / 0.8012 | 27.93 / 0.8464 |
+| ASF | 22.63 / 0.8467 | 35.79 / 0.9489 | 20.65 / 0.7999 | 27.95 / 0.8473 |
+| Large | 22.88 / 0.8569 | **37.62** / **0.9606** | 20.75 / 0.8121 | **30.26** / **0.8894** |
+
+Notes that apply to both tables:
+
+- CrossAttn is evaluated at 192x192 against 256x256 for the other configurations,
+  so its PSNR is not directly comparable and its ranks are read as indicative.
+- FiLM on RDD uses gradient clipping; without it, training diverged to NaN.
+- ASF is the one mechanism designed in this study. The others are reference
+  implementations of known mechanisms plus one capacity control.
+- SSIM was not logged for the two NAFNet document-shadow runs; all rankings in the
+  paper use PSNR.
+
+---
+
+## Reproducibility notes
+
+- About 80 training runs: 56 main-grid runs (seven entries including the no-fusion
+  baseline, two backbones, four datasets), 12 training-size subsets, and the
+  stability, clipping and control runs reported in the paper.
+- Each configuration was trained once. The reported differences do not capture
+  variation across random seeds, so small gaps should be read with that in mind.
+- Training logs, checkpoints and datasets are excluded from this repository by
+  `.gitignore`; only source code and result summaries are tracked.
+- The scaling study covers three mechanisms on SD7K at 30, 60, 100, 150 and 200
+  training pairs (`run_scaling_curve.py`).
+
+---
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
 
 ---
 
 ## Citation
 
-If you find this work useful, please cite:
-
 ```bibtex
-@article{...,
-  title     = {Understanding Feature Fusion Strategies in Transformer-based
-               Image Restoration: Evidence from Document Shadow Removal},
-  author    = {...},
-  journal   = {Applied Intelligence},
-  year      = {2026},
-  note      = {Under review}
+@article{unifuse2026,
+  title   = {UniFuse: A Controlled Testbed and Practical Guidelines for
+             Feature Fusion in Image Restoration},
+  author  = {Wang, Zhaona and Chu, Yangyang and Mu, Lili and Dong, Jin},
+  journal = {Applied Intelligence},
+  year    = {2026},
+  note    = {Under review}
 }
 ```
-
----
-
-## Acknowledgments
-
-This project builds upon [Restormer](https://github.com/swz30/Restormer) (CVPR 2022) and [ShaDocFormer](https://github.com/kilito777/ShaDocFormer) (IJCNN 2024). We thank the original authors for their excellent work.
